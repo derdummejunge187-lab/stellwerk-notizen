@@ -10,15 +10,14 @@ import platform
 import tempfile
 import threading
 import urllib.request
-import threading
-import urllib.request
+import ssl
+import sys
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  VERSION  ← hier anpassen
 APP_VERSION = "1.0.0"
 # GitHub: Dein Benutzername und Repository-Name
-GITHUB_USER = "derdummejunge187"
-GITHUB_REPO = "stellwerk-notizen"
+
 # URL zur version.txt im Repo (raw)
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/version.txt"
 # URL zum Download der neuen notizen_app.py
@@ -482,21 +481,7 @@ class TFTab(BaseTab):
 
 
 
-# ── Auto-Updater ──────────────────────────────────────────────────────────────
-def check_for_update(parent, silent=False):
-    def _check():
-        try:
-            with urllib.request.urlopen(VERSION_URL, timeout=5) as r:
-                remote = r.read().decode().strip()
-            if remote != APP_VERSION:
-                parent.after(0, lambda: _show_update(remote))
-            elif not silent:
-                parent.after(0, lambda: messagebox.showinfo(
-                    "Kein Update", f"Version {APP_VERSION} ist aktuell.", parent=parent))
-        except Exception:
-            if not silent:
-                parent.after(0, lambda: messagebox.showwarning(
-                    "Update", "Keine Verbindung zu GitHub.", parent=parent))
+
 
     def _show_update(remote):
         win = tk.Toplevel(parent)
