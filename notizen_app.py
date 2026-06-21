@@ -7,8 +7,10 @@ import threading, urllib.request, ssl, sys
 APP_VERSION  = "1.1.0"
 GITHUB_USER  = "derdummejunge187-lab"
 GITHUB_REPO  = "stellwerk-notizen"
+EXE_NAME     = "StellwerkNotizen.exe"
 VERSION_URL  = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/version.txt"
 DOWNLOAD_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/notizen_app.py"
+EXE_DOWNLOAD_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/{EXE_NAME}"
 # ══════════════════════════════════════════════════════════════════════════════
 
 CHANGELOG = [
@@ -22,6 +24,8 @@ CHANGELOG = [
         "Automatische Berechnung von reiner Fahrtzeit und Pausenzeit ab 2 erfassten Fahrten",
         "Fahrten koennen manuell als erledigt markiert werden, inkl. kurzer Dokumentation",
         "Neuer Button 'Aktuelle Fahrt' springt zur naechsten noch offenen Fahrt",
+        "Auto-Update laedt bei kompilierten .exe-Versionen die neue .exe direkt von GitHub "
+        "und ersetzt die laufende Version automatisch (mit Neustart)",
     ]),
     ("v1.0.0", "2025-05", [
         "Erste Version der Stellwerk-Notizen App",
@@ -169,19 +173,57 @@ def check_for_update(parent, silent=False):
         make_btn(bf, "Spaeter", win.destroy, bg="#CCBBBB", fg=C["TEXT"]).pack(side="left")
 
     def _do_update(win, remote):
+        is_frozen = getattr(sys, 'frozen', False)
+        base = os.path.dirname(os.path.abspath(sys.executable if is_frozen else __file__))
         try:
-            base   = os.path.dirname(os.path.abspath(sys.executable if getattr(sys,'frozen',False) else __file__))
-            target = os.path.join(base, "notizen_app.py")
-            with _https_get(DOWNLOAD_URL, timeout=20) as r:
-                new_code = r.read()
-            if os.path.exists(target):
-                shutil.copy2(target, target + f".v{APP_VERSION}.bak")
-            with open(target, "wb") as f:
-                f.write(new_code)
-            win.destroy()
-            messagebox.showinfo("Update",
-                f"v{remote} heruntergeladen!\nGespeichert: {target}\n\nBitte Programm neu starten.",
-                parent=parent)
+            if is_frozen:
+                if platform.system() != "Windows":
+                    messagebox.showerror("Update fehlgeschlagen",
+                        "Automatisches Ersetzen der .exe wird nur unter Windows unterstuetzt.",
+                        parent=parent)
+                    return
+                current_exe = os.path.abspath(sys.executable)
+                new_exe     = os.path.join(base, "_update_new.exe")
+                with _https_get(EXE_DOWNLOAD_URL, timeout=60) as r:
+                    new_data = r.read()
+                with open(new_exe, "wb") as f:
+                    f.write(new_data)
+                pid = os.getpid()
+                bat_path = os.path.join(base, "_apply_update.bat")
+                bat_content = (
+                    "@echo off\r\n"
+                    ":wait\r\n"
+                    f"tasklist /FI \"PID eq {pid}\" 2>NUL | findstr \"{pid}\" >NUL\r\n"
+                    "if not errorlevel 1 (\r\n"
+                    "    timeout /t 1 /nobreak >NUL\r\n"
+                    "    goto wait\r\n"
+                    ")\r\n"
+                    f"move /Y \"{new_exe}\" \"{current_exe}\" >NUL\r\n"
+                    f"start \"\" \"{current_exe}\"\r\n"
+                    "del \"%~f0\"\r\n"
+                )
+                with open(bat_path, "w", encoding="utf-8") as f:
+                    f.write(bat_content)
+                subprocess.Popen(["cmd", "/c", bat_path], cwd=base,
+                                  creationflags=subprocess.CREATE_NEW_CONSOLE)
+                win.destroy()
+                messagebox.showinfo("Update",
+                    f"v{remote} wird installiert.\nDie Anwendung schliesst sich jetzt "
+                    f"und startet automatisch mit der neuen Version neu.",
+                    parent=parent)
+                parent.after(300, lambda: os._exit(0))
+            else:
+                target = os.path.join(base, "notizen_app.py")
+                with _https_get(DOWNLOAD_URL, timeout=20) as r:
+                    new_code = r.read()
+                if os.path.exists(target):
+                    shutil.copy2(target, target + f".v{APP_VERSION}.bak")
+                with open(target, "wb") as f:
+                    f.write(new_code)
+                win.destroy()
+                messagebox.showinfo("Update",
+                    f"v{remote} heruntergeladen!\nGespeichert: {target}\n\nBitte Programm neu starten.",
+                    parent=parent)
         except Exception as ex:
             messagebox.showerror("Update fehlgeschlagen", str(ex), parent=parent)
 
