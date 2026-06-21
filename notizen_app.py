@@ -4,7 +4,7 @@ import json, os, shutil, csv, datetime, subprocess, platform, tempfile
 import threading, urllib.request, ssl, sys
 
 # ══════════════════════════════════════════════════════════════════════════════
-APP_VERSION  = "1.1.0"
+APP_VERSION  = "1.1.1"
 GITHUB_USER  = "derdummejunge187-lab"
 GITHUB_REPO  = "stellwerk-notizen"
 EXE_NAME     = "StellwerkNotizen.exe"
