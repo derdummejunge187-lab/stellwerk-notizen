@@ -17,7 +17,7 @@ import urllib.request
 #  VERSION  ← hier anpassen
 APP_VERSION = "1.0.0"
 # GitHub: Dein Benutzername und Repository-Name
-GITHUB_USER = "DEIN_GITHUB_NAME"
+GITHUB_USER = "derdummejunge187"
 GITHUB_REPO = "stellwerk-notizen"
 # URL zur version.txt im Repo (raw)
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/version.txt"
