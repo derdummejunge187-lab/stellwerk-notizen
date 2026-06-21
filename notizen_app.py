@@ -14,7 +14,7 @@ EXE_DOWNLOAD_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REP
 # ══════════════════════════════════════════════════════════════════════════════
 
 CHANGELOG = [
-    ("v1.1.1", "2026-06 14:30 Uhr", [
+    ("v1.1.0", "2025-06", [
         "Einstellungen-Tab hinzugefuegt (Stellwerke, Dark Mode, Update, Changelog)",
         "Stellwerke fuer Notizen-Auswahl sind jetzt konfigurierbar (bis zu 10)",
         "Hell/Dunkel-Modus wird gespeichert und beim Start wiederhergestellt",
@@ -28,7 +28,7 @@ CHANGELOG = [
         "und ersetzt die laufende Version automatisch (mit Neustart)",
         "fix: Fehler beim Editieren von Notizen behoben, die zu Datenverlust fuehren konnten",
     ]),
-    ("v1.0.0", "2026-06 13 Uhr", [
+    ("v1.0.0", "2025-05", [
         "Erste Version der Stellwerk-Notizen App",
         "Stellwerksnotizen und TF-Notizen Tabs",
         "CSV-Export, Drucken, Backup-Funktion",
@@ -206,7 +206,7 @@ def check_for_update(parent, silent=False):
                 with open(bat_path, "w", encoding="utf-8") as f:
                     f.write(bat_content)
                 subprocess.Popen(["cmd", "/c", bat_path], cwd=base,
-                                  creationflags=subprocess.CREATE_NEW_CONSOLE)
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
                 win.destroy()
                 messagebox.showinfo("Update",
                     f"v{remote} wird installiert.\nDie Anwendung schliesst sich jetzt "
