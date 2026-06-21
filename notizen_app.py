@@ -14,7 +14,7 @@ EXE_DOWNLOAD_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REP
 # ══════════════════════════════════════════════════════════════════════════════
 
 CHANGELOG = [
-    ("v1.1.0", "2025-06", [
+    ("v1.1.1", "2026-06 14:30 Uhr", [
         "Einstellungen-Tab hinzugefuegt (Stellwerke, Dark Mode, Update, Changelog)",
         "Stellwerke fuer Notizen-Auswahl sind jetzt konfigurierbar (bis zu 10)",
         "Hell/Dunkel-Modus wird gespeichert und beim Start wiederhergestellt",
@@ -26,8 +26,9 @@ CHANGELOG = [
         "Neuer Button 'Aktuelle Fahrt' springt zur naechsten noch offenen Fahrt",
         "Auto-Update laedt bei kompilierten .exe-Versionen die neue .exe direkt von GitHub "
         "und ersetzt die laufende Version automatisch (mit Neustart)",
+        "fix: Fehler beim Editieren von Notizen behoben, die zu Datenverlust fuehren konnten",
     ]),
-    ("v1.0.0", "2025-05", [
+    ("v1.0.0", "2026-06 13 Uhr", [
         "Erste Version der Stellwerk-Notizen App",
         "Stellwerksnotizen und TF-Notizen Tabs",
         "CSV-Export, Drucken, Backup-Funktion",
@@ -239,13 +240,17 @@ class NotePopup(tk.Toplevel):
         self.title("Notiz bearbeiten" if existing else "Neue Notiz")
         self.resizable(False, False)
         self.configure(bg=C["BG"])
-        self.grab_set()
-        w, h = 420, 540
-        self.update_idletasks()
-        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
-        py = parent.winfo_rooty()+(parent.winfo_height()-h)//2
-        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.withdraw()
         self._build()
+        self.update_idletasks()
+        w = 420
+        h = min(self.winfo_reqheight() + 10, self.winfo_screenheight() - 80)
+        h = max(h, 380)
+        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
+        py = max(10, parent.winfo_rooty()+(parent.winfo_height()-h)//2)
+        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.deiconify()
+        self.grab_set()
 
     def _build(self):
         hdr = tk.Frame(self, bg=C["PRIMARY"]); hdr.pack(fill="x")
@@ -519,13 +524,17 @@ class FahrtPopup(tk.Toplevel):
         self.title("Fahrt bearbeiten" if existing else "Neue Fahrt")
         self.resizable(False, False)
         self.configure(bg=C["BG"])
-        self.grab_set()
-        w, h = 400, 470
-        self.update_idletasks()
-        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
-        py = parent.winfo_rooty()+(parent.winfo_height()-h)//2
-        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.withdraw()
         self._build()
+        self.update_idletasks()
+        w = 400
+        h = min(self.winfo_reqheight() + 10, self.winfo_screenheight() - 80)
+        h = max(h, 320)
+        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
+        py = max(10, parent.winfo_rooty()+(parent.winfo_height()-h)//2)
+        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.deiconify()
+        self.grab_set()
 
     def _entry(self, parent, label, value=""):
         tk.Label(parent, text=label, font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
@@ -611,12 +620,7 @@ class DokuPopup(tk.Toplevel):
         self.title("Fahrt abschliessen")
         self.resizable(False, False)
         self.configure(bg=C["BG"])
-        self.grab_set()
-        w, h = 400, 300
-        self.update_idletasks()
-        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
-        py = parent.winfo_rooty()+(parent.winfo_height()-h)//2
-        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.withdraw()
 
         hdr = tk.Frame(self, bg=C["PRIMARY"]); hdr.pack(fill="x")
         tk.Label(hdr, text="Fahrt abschliessen", font=("Segoe UI",12,"bold"),
@@ -640,6 +644,16 @@ class DokuPopup(tk.Toplevel):
         br = tk.Frame(body, bg=C["BG"]); br.pack(fill="x", pady=(10,0))
         make_btn(br, "Abbrechen", self.destroy, bg="#CCBBBB", fg=C["TEXT"]).pack(side="right", padx=6)
         make_btn(br, "  Als erledigt markieren  ", self._confirm).pack(side="right")
+
+        self.update_idletasks()
+        w = 400
+        h = min(self.winfo_reqheight() + 10, self.winfo_screenheight() - 80)
+        h = max(h, 280)
+        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
+        py = max(10, parent.winfo_rooty()+(parent.winfo_height()-h)//2)
+        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.deiconify()
+        self.grab_set()
 
     def _confirm(self):
         text = self.doku.get("1.0","end").strip()
