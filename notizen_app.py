@@ -1,11 +1,10 @@
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
-import json, os, shutil, csv, datetime, subprocess, platform, tempfile, base64
+import json, os, shutil, csv, datetime, subprocess, platform, tempfile
 import threading, urllib.request, ssl, sys, re, hashlib, time, queue
-import http.server
 
 # ══════════════════════════════════════════════════════════════════════════════
-APP_VERSION  = "1.2.0"
+APP_VERSION  = "1.2.1"
 GITHUB_USER  = "derdummejunge187-lab"
 GITHUB_REPO  = "stellwerk-notizen"
 EXE_NAME     = "StellwerkNotizen.exe"
@@ -15,6 +14,20 @@ EXE_DOWNLOAD_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REP
 # ══════════════════════════════════════════════════════════════════════════════
 
 CHANGELOG = [
+    ("v1.2.1", "22.06.2026 18:00 Uhr", [
+        "Neuer Tab 'Trainings': Trainingstermine mit Anmeldung",
+        "Trainings: Host + bis zu 3 Helfer + Platzanzahl pro Termin",
+        "Trainings: Azubi-Raenge (Azubi KS, Azubi TF, Azubi FDl) koennen sich anmelden",
+        "Trainings: Keine Doppelanmeldungen, Platzbegrenzung",
+        "Trainings: Cloud-Sync via GitHub Gist (gleicher Mechanismus wie Personal)",
+        "Neuer Rang: Azubi KS, Azubi TF, Azubi FDl hinzugefuegt",
+        "Netzplan: 'Suedbahn' durch 'DVN' ersetzt",
+        "Personal-Tab: Fehler beim 'Mitarbeiter hinzufuegen' behoben",
+        "News-Tab entfernt (Webhook-Funktionalitaet eingestellt)",
+        "Anthropic/KI-Screenshot-Import entfernt (API-Key nicht mehr benoetigt)",
+        "API-Keys und Gist-URL jetzt fest im Skript verankert",
+        "Schichtplan: Google-Sheets-Ladefehler behoben",
+    ]),
     ("v1.2.0", "22.06.2026 12:00 Uhr", [
         "Neuer Tab 'Netzplan': zeigt das Streckennetz als interaktive Karte",
         "Neuer Tab 'Personal': Login mit BN/PW, 'Angemeldet bleiben'-Option",
@@ -33,7 +46,6 @@ CHANGELOG = [
         "Filterleiste passt sich automatisch an konfigurierte Stellwerke an",
         "Neuer Tab 'Fahrtenliste'",
         "Neuer Tab 'Schichtplan'",
-        "Neuer Tab 'News'",
     ]),
     ("v1.0.0", "21.06.2026 13:00 Uhr", [
         "Erste Version der Stellwerk-Notizen App",
@@ -60,8 +72,10 @@ STATUS_COLORS  = {"Offen":"#E74C3C","In Bearbeitung":"#F39C12","Erledigt":"#27AE
 PRIO_OPTIONS   = ["Hoch", "Mittel", "Niedrig"]
 PRIO_COLORS    = {"Hoch":"#C0392B","Mittel":"#E67E22","Niedrig":"#27AE60"}
 
-RANK_OPTIONS     = ["HR", "TF", "FDL", "KS"]
-RANK_COLORS      = {"HR":"#8B0000","TF":"#1A5276","FDL":"#145A32","KS":"#7D3C98"}
+RANK_OPTIONS     = ["HR", "TF", "FDL", "KS", "Azubi KS", "Azubi TF", "Azubi FDl"]
+RANK_COLORS      = {"HR":"#8B0000","TF":"#1A5276","FDL":"#145A32","KS":"#7D3C98",
+                     "Azubi KS":"#A569BD","Azubi TF":"#3498DB","Azubi FDl":"#1ABC9C"}
+AZUBI_RANKS      = {"Azubi KS", "Azubi TF", "Azubi FDl"}
 FDL_LIZENZEN     = ["AK", "NS", "STB", "BHBF"]
 TF_STRECKENKUNDE = ["BG-AK", "AK-MSB", "BHBF-SHBF"]
 TF_FAHRZEUGE     = ["BR 429", "BR 648", "BR 628"]
@@ -80,7 +94,9 @@ DATA_FILE     = os.path.join(BASE_DIR, "notizen_data.json")
 TF_FILE       = os.path.join(BASE_DIR, "tf_data.json")
 FAHRTEN_FILE  = os.path.join(BASE_DIR, "fahrten_data.json")
 SCHICHTPLAN_CACHE_FILE = os.path.join(BASE_DIR, "schichtplan_cache.json")
-NEWS_FILE     = os.path.join(BASE_DIR, "news_data.json")
+TRAININGS_FILE = os.path.join(BASE_DIR, "trainings_data.json")
+TRAININGS_GIST_FILENAME = "trainings_data.json"
+TRAININGS_GIST_FILENAME = "trainings_data.json"
 BACKUP_DIR    = os.path.join(BASE_DIR, "backups")
 SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 PERSONAL_SESSION_FILE = os.path.join(BASE_DIR, "personal_session.json")
@@ -98,10 +114,7 @@ def load_settings():
                 return json.load(f)
         except:
             pass
-    return {"dark_mode": False, "stw_options": list(DEFAULT_STW_OPTIONS), "anthropic_api_key": "",
-            "gsheet_url": "", "news_webhook_port": 8765,
-            "news_channel1_name": "Kanal 1", "news_channel2_name": "Kanal 2",
-            "personal_gist_url": "", "personal_gist_token": ""}
+    return {"dark_mode": False, "stw_options": list(DEFAULT_STW_OPTIONS)}
 
 def save_settings(s):
     with open(SETTINGS_FILE,"w",encoding="utf-8") as f:
@@ -160,7 +173,14 @@ def show_toast(root, title, message, duration_ms=7000):
         pass
 
 
-# ── Gist-Sync fuer Personal ───────────────────────────────────────────────────
+# ── Fest verankerte Gist-Konfiguration (hier eintragen, kein Eingabefeld mehr) ──
+GIST_URL   = ""  # ← HIER die Gist-URL eintragen, z.B. "https://gist.github.com/username/abc123"
+GIST_TOKEN = ""  # ← HIER den GitHub Token eintragen (mit gist-Berechtigung)
+
+# ── Aktuell eingeloggter Benutzer (wird vom PersonalTab gesetzt) ─────────
+_CURRENT_USER = {"bn": None, "roblox": None, "rank": None}
+
+# ── Gist-Sync fuer Personal & Trainings ───────────────────────────────────────
 def _gist_api(method, url, token, data=None):
     ctx = ssl.create_default_context()
     body = json.dumps(data).encode("utf-8") if data else None
@@ -174,8 +194,8 @@ def _gist_api(method, url, token, data=None):
 
 def personal_sync_load():
     """Laedt Personal-Daten vom Gist. Gibt (mitarbeiter_list, lock_info) zurueck."""
-    url = SETTINGS.get("personal_gist_url","").strip()
-    token = SETTINGS.get("personal_gist_token","").strip()
+    url = GIST_URL.strip()
+    token = GIST_TOKEN.strip()
     if not url or not token:
         return None, None
     try:
@@ -198,8 +218,8 @@ def personal_sync_load():
 
 def personal_sync_save(mitarbeiter, lock):
     """Speichert Personal-Daten zum Gist."""
-    url = SETTINGS.get("personal_gist_url","").strip()
-    token = SETTINGS.get("personal_gist_token","").strip()
+    url = GIST_URL.strip()
+    token = GIST_TOKEN.strip()
     if not url or not token:
         return False, "Kein Gist-URL/Token konfiguriert"
     try:
@@ -215,6 +235,44 @@ def personal_sync_save(mitarbeiter, lock):
         return True, ""
     except Exception as e:
         return False, str(e)
+
+def gist_sync_data(filename, content):
+    """Universelle Gist-Sync: speichert JSON-Daten in einer separaten Datei im selben Gist."""
+    url = GIST_URL.strip()
+    token = GIST_TOKEN.strip()
+    if not url or not token:
+        return False, "Kein Gist konfiguriert"
+    try:
+        m = re.search(r"gist\.github\.com/[^/]+/([a-f0-9]+)", url)
+        if not m:
+            return False, "Ungueltige Gist-URL"
+        gist_id = m.group(1)
+        payload = {"files": {filename: {"content": content}}}
+        _gist_api("PATCH", f"https://api.github.com/gists/{gist_id}", token, payload)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def gist_load_data(filename):
+    """Universelle Gist-Sync: laedt JSON-Daten aus einer separaten Datei im Gist."""
+    url = GIST_URL.strip()
+    token = GIST_TOKEN.strip()
+    if not url or not token:
+        return None
+    try:
+        m = re.search(r"gist\.github\.com/[^/]+/([a-f0-9]+)", url)
+        if not m:
+            return None
+        gist_id = m.group(1)
+        data = _gist_api("GET", f"https://api.github.com/gists/{gist_id}", token)
+        files = data.get("files", {})
+        f = files.get(filename, {})
+        raw = f.get("content", "")
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 # ── Session (Angemeldet bleiben) ──────────────────────────────────────────────
@@ -262,10 +320,10 @@ def save_schichtplan_cache(data):
 def fetch_schichtplan_once():
     url = SCHICHTPLAN_GSHEET_URL.strip()
     if not url or "DEINE_SHEET_ID" in url:
-        raise ValueError("Bitte SCHICHTPLAN_GSHEET_URL im Skript eintragen (Zeile ~109).")
+        raise ValueError("Bitte SCHICHTPLAN_GSHEET_URL im Skript eintragen.")
     csv_url = gsheet_csv_url(url)
     if not csv_url:
-        raise ValueError("Der hinterlegte Google-Sheets-Link konnte nicht gelesen werden.")
+        raise ValueError("Der hinterlegte Google-Sheets-Link konnte nicht gelesen werden. Stelle sicher, dass die Tabelle oeffentlich ('Jeder mit Link – Betrachter') freigegeben ist.")
     with _https_get(csv_url, timeout=20) as r:
         raw = r.read().decode("utf-8-sig", errors="replace")
     new_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -301,75 +359,6 @@ def _on_schichtplan_update(changed):
         show_toast(_APP_INSTANCE, "Schichtplan aktualisiert",
                    "Der Schichtplan wurde geaendert - bitte pruefen.")
 
-def add_news_entry(channel_num, author, content):
-    entries = load_json(NEWS_FILE)
-    label = SETTINGS.get(f"news_channel{channel_num}_name", f"Kanal {channel_num}")
-    entry = {"id": int(time.time()*1000), "channel": label,
-              "author": (author or "Unbekannt").strip() or "Unbekannt",
-              "content": (content or "").strip(), "ts": now_str()}
-    entries.append(entry)
-    entries = entries[-200:]
-    save_json(NEWS_FILE, entries)
-    _EVENT_QUEUE.put(("news", entry))
-    return entry
-
-def _on_news_update(entry):
-    if _APP_INSTANCE is None:
-        return
-    tab = _APP_INSTANCE._tabs.get("News")
-    if tab is not None and hasattr(tab, "refresh"):
-        tab.refresh()
-    preview = entry["content"][:120] + ("…" if len(entry["content"]) > 120 else "")
-    show_toast(_APP_INSTANCE, f"Neue Nachricht – {entry['channel']}", preview or "(kein Text)")
-
-class _WebhookHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        pass
-    def do_POST(self):
-        try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b""
-            try:
-                payload = json.loads(raw.decode("utf-8")) if raw else {}
-                if not isinstance(payload, dict):
-                    payload = {"content": str(payload)}
-            except Exception:
-                payload = {"content": raw.decode("utf-8", errors="replace")}
-            path = self.path.strip("/")
-            channel_num = "1" if path.endswith("1") else ("2" if path.endswith("2") else None)
-            if channel_num is None:
-                self.send_response(404); self.end_headers(); return
-            author  = payload.get("username") or payload.get("author") or "Unbekannt"
-            content = payload.get("content") or payload.get("message") or payload.get("text") or ""
-            add_news_entry(channel_num, author, content)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-        except Exception:
-            try:
-                self.send_response(500); self.end_headers()
-            except Exception:
-                pass
-    def do_GET(self):
-        self.send_response(200); self.end_headers()
-        self.wfile.write(b"Stellwerk Notizen Webhook-Empfaenger laeuft.")
-
-_news_server_ref = {"server": None, "port": None}
-
-def _news_webhook_server_loop():
-    try:
-        port = int(SETTINGS.get("news_webhook_port", 8765))
-    except Exception:
-        port = 8765
-    try:
-        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), _WebhookHandler)
-        _news_server_ref["server"] = server
-        _news_server_ref["port"] = port
-        server.serve_forever()
-    except Exception:
-        pass
-
 _BG_THREADS_STARTED = False
 
 def start_background_services():
@@ -378,7 +367,6 @@ def start_background_services():
         return
     _BG_THREADS_STARTED = True
     threading.Thread(target=_schichtplan_poll_loop, daemon=True).start()
-    threading.Thread(target=_news_webhook_server_loop, daemon=True).start()
 
 def parse_hhmm(s):
     try:
@@ -415,19 +403,6 @@ def _https_get(url, timeout=8):
     ctx = ssl.create_default_context()
     req = urllib.request.Request(url, headers={"User-Agent": "StellwerkNotizen-Updater/1.0"})
     return urllib.request.urlopen(req, timeout=timeout, context=ctx)
-
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-sonnet-4-6"
-
-def anthropic_request(api_key, body, timeout=60):
-    ctx = ssl.create_default_context()
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        ANTHROPIC_API_URL, data=data, method="POST",
-        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-        return json.loads(r.read().decode("utf-8"))
 
 def check_for_update(parent, silent=False):
     def _check():
@@ -512,9 +487,8 @@ def check_for_update(parent, silent=False):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# NotePopup, BaseTab, FahrtPopup, DokuPopup, ScreenshotReviewPopup
-# FahrtenTab, SchichtplanTab, NewsTab, SettingsTab
-# (unveraendert aus v1.1.0 – gekuerzt fuer Lesbarkeit, vollstaendig uebernommen)
+# NotePopup, BaseTab, FahrtPopup, DokuPopup
+# FahrtenTab, SchichtplanTab, SettingsTab
 # ════════════════════════════════════════════════════════════════════════
 
 class NotePopup(tk.Toplevel):
@@ -910,49 +884,6 @@ class DokuPopup(tk.Toplevel):
         self.on_confirm(text); self.destroy()
 
 
-class ScreenshotReviewPopup(tk.Toplevel):
-    def __init__(self, parent, entries, on_confirm):
-        super().__init__(parent)
-        self.on_confirm = on_confirm; self.entries = entries; self._vars = []
-        self.title("Erkannte Fahrten pruefen")
-        self.resizable(False, False); self.configure(bg=C["BG"]); self.withdraw()
-        self._build()
-        self.update_idletasks()
-        w, h = 540, max(min(self.winfo_reqheight()+10, self.winfo_screenheight()-80), 280)
-        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
-        py = max(10, parent.winfo_rooty()+(parent.winfo_height()-h)//2)
-        self.geometry(f"{w}x{h}+{px}+{py}")
-        self.deiconify(); self.grab_set()
-
-    def _build(self):
-        hdr = tk.Frame(self, bg=C["PRIMARY"]); hdr.pack(fill="x")
-        tk.Label(hdr, text=f"{len(self.entries)} Fahrten erkannt - bitte pruefen",
-                 font=("Segoe UI",12,"bold"), bg=C["PRIMARY"], fg="white").pack(side="left", padx=16, pady=12)
-        x = tk.Label(hdr, text="  X  ", font=("Segoe UI",12,"bold"), bg=C["PRIMARY"], fg="white", cursor="hand2")
-        x.pack(side="right", padx=8); x.bind("<Button-1>", lambda e: self.destroy())
-        body = tk.Frame(self, bg=C["BG"]); body.pack(fill="both", expand=True, padx=16, pady=12)
-        tk.Label(body, text="Haekchen entfernen, um eine Fahrt NICHT zu uebernehmen:",
-                 font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w", pady=(0,8))
-        for e in self.entries:
-            row = tk.Frame(body, bg=C["PANEL"], highlightthickness=1, highlightbackground=C["BORDER"])
-            row.pack(fill="x", pady=3)
-            var = tk.BooleanVar(value=True); self._vars.append(var)
-            tk.Checkbutton(row, variable=var, bg=C["PANEL"], activebackground=C["PANEL"],
-                           selectcolor=C["BG"], cursor="hand2").pack(side="left", padx=8)
-            txt = f"{e.get('start','?')}  →  {e.get('ziel','?')}      {e.get('abfahrt','--:--')} - {e.get('ankunft','--:--')}      [{e.get('fahrt','')}]"
-            tk.Label(row, text=txt, font=FONT_TABLE, bg=C["PANEL"], fg=C["TEXT"],
-                     anchor="w").pack(side="left", fill="x", expand=True, padx=4, pady=8)
-        br = tk.Frame(body, bg=C["BG"]); br.pack(fill="x", pady=(12,0))
-        make_btn(br, "Abbrechen", self.destroy, bg="#CCBBBB", fg=C["TEXT"]).pack(side="right", padx=6)
-        make_btn(br, "  Ausgewaehlte hinzufuegen  ", self._confirm).pack(side="right")
-
-    def _confirm(self):
-        selected = [e for e, v in zip(self.entries, self._vars) if v.get()]
-        if not selected:
-            messagebox.showwarning("Hinweis","Keine Fahrt ausgewaehlt.", parent=self); return
-        self.on_confirm(selected); self.destroy()
-
-
 class FahrtenTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=C["BG"])
@@ -967,7 +898,6 @@ class FahrtenTab(tk.Frame):
         tb = tk.Frame(self, bg=C["BG"]); tb.pack(fill="x", padx=16, pady=10)
         make_btn(tb, "+  Fahrt hinzufuegen", self._open_add, pady=7).pack(side="left")
         make_btn(tb, "▶  Aktuelle Fahrt", self._jump_current, bg="#557799", pady=7).pack(side="left", padx=8)
-        make_btn(tb, "📷  Screenshot importieren", self._import_screenshot, bg="#557755", pady=7).pack(side="left", padx=8)
 
     def _build_summary(self):
         self.summary_frame = tk.Frame(self, bg=C["PANEL"], highlightthickness=1, highlightbackground=C["BORDER"])
@@ -1118,74 +1048,6 @@ class FahrtenTab(tk.Frame):
     def _flash(self, row):
         row.configure(highlightbackground="#FFD700", highlightthickness=3)
         self.after(900, lambda: row.configure(highlightbackground=C["PRIMARY"], highlightthickness=2))
-    def _import_screenshot(self):
-        api_key = SETTINGS.get("anthropic_api_key","").strip()
-        if not api_key:
-            messagebox.showwarning("API-Key fehlt","Bitte Anthropic API-Key in Einstellungen hinterlegen.",parent=self); return
-        path = filedialog.askopenfilename(title="Screenshot auswaehlen", parent=self,
-            filetypes=[("Bilder","*.png *.jpg *.jpeg *.webp"),("Alle Dateien","*.*")])
-        if not path: return
-        ext = os.path.splitext(path)[1].lower()
-        media_type = {".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp"}.get(ext,"image/png")
-        try:
-            with open(path,"rb") as f: img_b64 = base64.b64encode(f.read()).decode("ascii")
-        except Exception as ex:
-            messagebox.showerror("Fehler",f"Datei konnte nicht gelesen werden:\n{ex}",parent=self); return
-        wait = tk.Toplevel(self.winfo_toplevel())
-        wait.title("Analysiere ..."); wait.resizable(False,False); wait.configure(bg=C["BG"])
-        wait.transient(self.winfo_toplevel())
-        self.update_idletasks(); top = self.winfo_toplevel()
-        wait.geometry(f"320x110+{top.winfo_rootx()+(top.winfo_width()-320)//2}+{top.winfo_rooty()+(top.winfo_height()-110)//2}")
-        wait.grab_set()
-        tk.Label(wait, text="Screenshot wird analysiert ...", font=FONT_INPUT, bg=C["BG"], fg=C["TEXT"]).pack(expand=True, pady=30)
-        def worker():
-            try:
-                prompt = (
-                    "Du bekommst einen Screenshot eines Fahrplans. Extrahiere alle Fahrten. "
-                    "Antworte AUSSCHLIESSLICH mit einem JSON-Array ohne Markdown. Felder: "
-                    f"start, ziel, abfahrt (HH:MM), ankunft (HH:MM), fahrt (einer von: {', '.join(FAHRT_OPTIONS)})."
-                )
-                body = {"model":ANTHROPIC_MODEL,"max_tokens":2000,"messages":[{"role":"user","content":[
-                    {"type":"image","source":{"type":"base64","media_type":media_type,"data":img_b64}},
-                    {"type":"text","text":prompt}]}]}
-                result = anthropic_request(api_key, body)
-                if "error" in result: raise RuntimeError(result["error"].get("message","API-Fehler"))
-                raw = "".join(b.get("text","") for b in result.get("content",[]) if b.get("type")=="text").strip()
-                raw = raw.strip("`").strip()
-                if raw.lower().startswith("json"): raw = raw[4:].strip()
-                entries = json.loads(raw)
-                if not isinstance(entries, list): raise ValueError("Unerwartetes Format")
-                self.after(0, lambda: self._on_screenshot_result(wait, entries))
-            except Exception as ex:
-                self.after(0, lambda ex=ex: self._on_screenshot_error(wait, ex))
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_screenshot_error(self, wait, ex):
-        wait.destroy(); messagebox.showerror("Fehler bei der Analyse", str(ex), parent=self)
-    def _on_screenshot_result(self, wait, entries):
-        wait.destroy()
-        cleaned = []
-        for e in entries:
-            if not isinstance(e, dict): continue
-            fahrt = str(e.get("fahrt","")).strip()
-            if fahrt not in FAHRT_OPTIONS: fahrt = FAHRT_OPTIONS[0]
-            cleaned.append({"start":str(e.get("start","")).strip(),"ziel":str(e.get("ziel","")).strip(),
-                             "abfahrt":str(e.get("abfahrt","")).strip(),"ankunft":str(e.get("ankunft","")).strip(),"fahrt":fahrt})
-        if not cleaned:
-            messagebox.showinfo("Screenshot-Import","Es wurden keine Fahrten erkannt.",parent=self); return
-        ScreenshotReviewPopup(self.winfo_toplevel(), cleaned, self._apply_screenshot_import)
-    def _apply_screenshot_import(self, selected):
-        skipped = 0
-        for data in selected:
-            if parse_hhmm(data.get("abfahrt","")) is None or parse_hhmm(data.get("ankunft","")) is None:
-                skipped += 1; continue
-            d = dict(data); d.update({"erledigt":False,"doku":"","ts":now_str(),"ts_edit":now_str(),"id":self._id_ctr})
-            self._id_ctr += 1; self.fahrten.append(d)
-        save_json(self.data_path, self.fahrten); self._refresh()
-        if skipped:
-            messagebox.showwarning("Hinweis",f"{skipped} Fahrt(en) ohne gueltige Uhrzeit uebersprungen.",parent=self)
-
-
 class SchichtplanTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=C["BG"])
@@ -1261,67 +1123,18 @@ class SchichtplanTab(tk.Frame):
             text=f"Letzte Pruefung: {cache.get('last_check') or '-'}   |   Letzte Aenderung: {cache.get('last_change') or 'noch keine'}")
 
 
-class NewsTab(tk.Frame):
-    def __init__(self, parent):
-        super().__init__(parent, bg=C["BG"])
-        self._build_toolbar(); self._build_list(); self.refresh()
-
-    def _build_toolbar(self):
-        tb = tk.Frame(self, bg=C["BG"]); tb.pack(fill="x", padx=16, pady=10)
-        port = SETTINGS.get("news_webhook_port",8765)
-        c1 = SETTINGS.get("news_channel1_name","Kanal 1"); c2 = SETTINGS.get("news_channel2_name","Kanal 2")
-        info = (f"Webhook-Ziele:\n"
-                f"{c1}:  http://<IP>:{port}/webhook/1   (POST, JSON: content, username)\n"
-                f"{c2}:  http://<IP>:{port}/webhook/2")
-        tk.Label(tb, text=info, font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"],
-                 justify="left", anchor="w").pack(side="left")
-        make_btn(tb, "🔄  Aktualisieren", self.refresh, pady=7).pack(side="right")
-
-    def _build_list(self):
-        outer = tk.Frame(self, bg=C["BG"]); outer.pack(fill="both", expand=True, padx=16, pady=(0,16))
-        self.canvas = tk.Canvas(outer, bg=C["BG"], highlightthickness=0)
-        sb = tk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y"); self.canvas.pack(side="left", fill="both", expand=True)
-        self.rf = tk.Frame(self.canvas, bg=C["BG"])
-        self._cw = self.canvas.create_window((0,0), window=self.rf, anchor="nw")
-        self.rf.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self._cw, width=e.width))
-        self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-1*(e.delta/120)),"units"))
-
-    def refresh(self):
-        for w in self.rf.winfo_children(): w.destroy()
-        entries = sorted(load_json(NEWS_FILE), key=lambda e: e.get("id",0), reverse=True)
-        if not entries:
-            tk.Label(self.rf, text="Noch keine Nachrichten empfangen.", font=FONT_LABEL,
-                     bg=C["BG"], fg=C["SUBTEXT"]).pack(pady=40); return
-        for i, e in enumerate(entries):
-            rbg = C["ROW_ODD"] if i%2==0 else C["ROW_EVEN"]
-            row = tk.Frame(self.rf, bg=rbg, highlightthickness=1, highlightbackground=C["BORDER"])
-            row.pack(fill="x", pady=2)
-            top = tk.Frame(row, bg=rbg); top.pack(fill="x")
-            tk.Label(top, text=e.get("channel",""), font=("Segoe UI",8,"bold"),
-                     bg=C["PRIMARY"], fg="white", padx=6, pady=2).pack(side="left", padx=8, pady=8)
-            tk.Label(top, text=e.get("author",""), font=("Segoe UI",9,"bold"),
-                     bg=rbg, fg=C["TEXT"]).pack(side="left", padx=6)
-            tk.Label(top, text=e.get("ts",""), font=("Segoe UI",8),
-                     bg=rbg, fg=C["SUBTEXT"]).pack(side="right", padx=10)
-            tk.Label(row, text=e.get("content",""), font=FONT_TABLE, bg=rbg, fg=C["TEXT"],
-                     anchor="w", justify="left", wraplength=900).pack(fill="x", padx=14, pady=(0,8))
-
-
 # ════════════════════════════════════════════════════════════════════════
 # NETZPLAN TAB
 # ════════════════════════════════════════════════════════════════════════
 class NetzplanTab(tk.Frame):
-    """Netzplan – 1:1 Nachbau des Südbahn-Streckennetzes RB4/RB14/RB16."""
+    """Netzplan – 1:1 Nachbau des DVN-Streckennetzes."""
     def __init__(self, parent):
         super().__init__(parent, bg=C["BG"])
         self._build()
 
     def _build(self):
         tb = tk.Frame(self, bg=C["BG"]); tb.pack(fill="x", padx=16, pady=8)
-        tk.Label(tb, text="Netzplan – Südbahn", font=("Segoe UI",13,"bold"),
+        tk.Label(tb, text="Netzplan – DVN", font=("Segoe UI",13,"bold"),
                  bg=C["BG"], fg=C["TEXT"]).pack(side="left")
         outer = tk.Frame(self, bg=C["PANEL"], highlightthickness=1,
                          highlightbackground=C["BORDER"])
@@ -1511,7 +1324,7 @@ class NetzplanTab(tk.Frame):
 
         # ── Titel ──
         c.create_text(p(20, 40)[0], p(20,40)[1],
-                      text="≡  Südbahn", font=("Segoe UI", max(int(15*s),10), "bold"),
+                      text="≡  DVN", font=("Segoe UI", max(int(15*s),10), "bold"),
                       fill=COL_RB4, anchor="w")
         c.create_text(p(20, 105)[0], p(20,105)[1],
                       text="AGENDA DER V1.1",
@@ -1572,6 +1385,14 @@ class PersonalUserPopup(tk.Toplevel):
         inner = tk.Frame(body, bg=C["BG"]); inner.pack(fill="both", expand=True, padx=20, pady=14)
         ex = self.existing or {}
 
+        # Benutzername (BN) - Verknuepfung zum Login
+        tk.Label(inner, text="BN (Benutzername)", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.bn_e = tk.Entry(inner, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
+                              insertbackground=C["TEXT"], highlightthickness=1,
+                              highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"])
+        self.bn_e.pack(fill="x", ipady=5, pady=4)
+        self.bn_e.insert(0, ex.get("bn",""))
+        tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", pady=6)
         # Roblox Username
         tk.Label(inner, text="Roblox-Username", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
         self.roblox_e = tk.Entry(inner, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
@@ -1653,12 +1474,14 @@ class PersonalUserPopup(tk.Toplevel):
         self._build_lizenzen(r)
 
     def _confirm(self):
+        bn = self.bn_e.get().strip()
         roblox = self.roblox_e.get().strip()
         if not roblox:
             messagebox.showwarning("Fehler","Bitte Roblox-Username eingeben.",parent=self); return
         rank = self.rank_var.get()
         data = {
             "id": self.existing.get("id", int(time.time()*1000)) if self.existing else int(time.time()*1000),
+            "bn": bn,
             "roblox": roblox,
             "rank": rank,
             "fdl_lizenzen": [k for k,v in self._fdl_vars.items() if v.get()],
@@ -1730,6 +1553,10 @@ class PersonalTab(tk.Frame):
 
     def _do_login(self, bn, from_session=False):
         self._current_bn = bn
+        global _CURRENT_USER
+        _CURRENT_USER["bn"] = bn
+        _CURRENT_USER["roblox"] = bn
+        _CURRENT_USER["rank"] = ""
         if hasattr(self, "_login_frame") and self._login_frame.winfo_exists():
             self._login_frame.destroy()
         self._build_main()
@@ -1771,6 +1598,8 @@ class PersonalTab(tk.Frame):
     def _logout(self):
         clear_session()
         self._current_bn = None
+        global _CURRENT_USER
+        _CURRENT_USER["bn"] = None; _CURRENT_USER["roblox"] = None; _CURRENT_USER["rank"] = None
         if hasattr(self, "_main_frame") and self._main_frame.winfo_exists():
             self._main_frame.destroy()
         self._build_login()
@@ -1791,6 +1620,13 @@ class PersonalTab(tk.Frame):
     def _on_data_loaded(self, mitarbeiter, lock):
         self._mitarbeiter = mitarbeiter
         self._lock = lock
+        global _CURRENT_USER
+        if _CURRENT_USER["bn"]:
+            for m in self._mitarbeiter:
+                if m.get("bn", "").lower() == _CURRENT_USER["bn"].lower():
+                    _CURRENT_USER["roblox"] = m.get("roblox", _CURRENT_USER["bn"])
+                    _CURRENT_USER["rank"] = m.get("rank", "")
+                    break
         self._sync_lbl.configure(text=f"Stand: {now_str()}")
         self._refresh_list()
 
@@ -1868,10 +1704,17 @@ class PersonalTab(tk.Frame):
 
     # ─── CRUD ─────────────────────────────────────────────────────────────────
     def _open_add(self):
-        PersonalUserPopup(self.winfo_toplevel(), self._add)
+        try:
+            PersonalUserPopup(self.winfo_toplevel(), self._add)
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Popup konnte nicht geoeffnet werden:\n{e}", parent=self)
 
     def _add(self, data):
         self._mitarbeiter.append(data)
+        global _CURRENT_USER
+        if _CURRENT_USER["bn"] and _CURRENT_USER["bn"].lower() == data.get("bn", "").lower():
+            _CURRENT_USER["roblox"] = data.get("roblox", _CURRENT_USER["bn"])
+            _CURRENT_USER["rank"] = data.get("rank", "")
         threading.Thread(target=lambda: personal_sync_save(self._mitarbeiter, self._lock), daemon=True).start()
         self._sync_lbl.configure(text=f"Gespeichert: {now_str()}")
         self._refresh_list()
@@ -1883,13 +1726,16 @@ class PersonalTab(tk.Frame):
             messagebox.showwarning("Gesperrt",
                 f"Wird gerade von '{locked_by}' bearbeitet.\nBitte kurz warten.", parent=self)
             return
-        # Lock direkt speichern
         threading.Thread(target=lambda: personal_sync_save(self._mitarbeiter, self._lock), daemon=True).start()
         def on_confirm(data):
             self._release_lock(uid)
             for i, m in enumerate(self._mitarbeiter):
                 if str(m.get("id","")) == uid:
                     self._mitarbeiter[i] = data; break
+            global _CURRENT_USER
+            if _CURRENT_USER["bn"] and _CURRENT_USER["bn"].lower() == data.get("bn", "").lower():
+                _CURRENT_USER["roblox"] = data.get("roblox", _CURRENT_USER["bn"])
+                _CURRENT_USER["rank"] = data.get("rank", "")
             threading.Thread(target=lambda: personal_sync_save(self._mitarbeiter, self._lock), daemon=True).start()
             self._sync_lbl.configure(text=f"Gespeichert: {now_str()}")
             self._refresh_list()
@@ -1909,7 +1755,328 @@ class PersonalTab(tk.Frame):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# SETTINGS TAB (mit Gist-Einstellungen ergaenzt)
+# TRAININGS TAB
+# ════════════════════════════════════════════════════════════════════════
+
+class TrainingPopup(tk.Toplevel):
+    """Training anlegen oder bearbeiten."""
+    def __init__(self, parent, on_confirm, existing=None, mitarbeiter_list=None):
+        super().__init__(parent)
+        self.on_confirm = on_confirm
+        self.existing   = existing
+        self.mitarbeiter_list = mitarbeiter_list or []
+        self.title("Training bearbeiten" if existing else "Neues Training")
+        self.resizable(False, False)
+        self.configure(bg=C["BG"])
+        self.withdraw()
+        self._build()
+        self.update_idletasks()
+        w, h = 480, 520
+        px = parent.winfo_rootx()+(parent.winfo_width()-w)//2
+        py = max(10, parent.winfo_rooty()+(parent.winfo_height()-h)//2)
+        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.deiconify(); self.grab_set()
+
+    def _build(self):
+        hdr = tk.Frame(self, bg=C["PRIMARY"]); hdr.pack(fill="x")
+        tk.Label(hdr, text="Training bearbeiten" if self.existing else "Neues Training",
+                 font=("Segoe UI",12,"bold"), bg=C["PRIMARY"], fg="white").pack(side="left", padx=16, pady=12)
+        x = tk.Label(hdr, text="  X  ", font=("Segoe UI",12,"bold"),
+                     bg=C["PRIMARY"], fg="white", cursor="hand2")
+        x.pack(side="right", padx=8); x.bind("<Button-1>", lambda e: self.destroy())
+        body = tk.Frame(self, bg=C["BG"]); body.pack(fill="both", expand=True, padx=20, pady=14)
+        ex = self.existing or {}
+        # Titel
+        tk.Label(body, text="Titel", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.titel_e = tk.Entry(body, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
+                                insertbackground=C["TEXT"], highlightthickness=1,
+                                highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"])
+        self.titel_e.pack(fill="x", ipady=5, pady=4)
+        self.titel_e.insert(0, ex.get("titel",""))
+        tk.Frame(body, bg=C["BORDER"], height=1).pack(fill="x", pady=6)
+        # Datum/Zeit
+        dr = tk.Frame(body, bg=C["BG"]); dr.pack(fill="x")
+        dl = tk.Frame(dr, bg=C["BG"]); dl.pack(side="left", fill="x", expand=True)
+        tk.Label(dl, text="Datum (TT.MM.JJJJ)", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.datum_e = tk.Entry(dl, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
+                                insertbackground=C["TEXT"], highlightthickness=1,
+                                highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"])
+        self.datum_e.pack(fill="x", ipady=5, pady=4)
+        self.datum_e.insert(0, ex.get("datum",""))
+        dr2 = tk.Frame(dr, bg=C["BG"]); dr2.pack(side="left", fill="x", expand=True, padx=(10,0))
+        tk.Label(dr2, text="Zeit (HH:MM)", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.zeit_e = tk.Entry(dr2, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
+                               insertbackground=C["TEXT"], highlightthickness=1,
+                               highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"])
+        self.zeit_e.pack(fill="x", ipady=5, pady=4)
+        self.zeit_e.insert(0, ex.get("zeit",""))
+        tk.Frame(body, bg=C["BORDER"], height=1).pack(fill="x", pady=6)
+        # Host + Helper (Auswahl aus Mitarbeiterliste)
+        namen = [m.get("roblox","?") for m in self.mitarbeiter_list] if self.mitarbeiter_list else []
+        if not namen:
+            namen = [""]
+        tk.Label(body, text="Host (Ausbilder/Leiter)", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.host_var = tk.StringVar(value=ex.get("host",""))
+        ttk.Combobox(body, textvariable=self.host_var, values=namen,
+                     state="normal", font=FONT_INPUT).pack(fill="x", pady=4)
+        tk.Frame(body, bg=C["BORDER"], height=1).pack(fill="x", pady=6)
+        tk.Label(body, text="Helfer (bis zu 3)", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.helper_vars = []
+        for i in range(3):
+            var = tk.StringVar(value=ex.get("helpers",["","",""])[i] if i < len(ex.get("helpers",[])) else "")
+            self.helper_vars.append(var)
+            ttk.Combobox(body, textvariable=var, values=namen,
+                         state="normal", font=FONT_INPUT, width=40).pack(fill="x", pady=2)
+        tk.Frame(body, bg=C["BORDER"], height=1).pack(fill="x", pady=6)
+        # Platzanzahl
+        tk.Label(body, text="Maximale Teilnehmerzahl", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"]).pack(anchor="w")
+        self.max_e = tk.Entry(body, font=FONT_INPUT, relief="flat", bg=C["PANEL"], fg=C["TEXT"],
+                              insertbackground=C["TEXT"], highlightthickness=1,
+                              highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=8)
+        self.max_e.pack(anchor="w", ipady=5, pady=4)
+        self.max_e.insert(0, str(ex.get("max_participants",10)))
+        br = tk.Frame(body, bg=C["BG"]); br.pack(fill="x", pady=(14,0))
+        make_btn(br, "Abbrechen", self.destroy, bg="#CCBBBB", fg=C["TEXT"]).pack(side="right", padx=6)
+        make_btn(br, "  Speichern  ", self._confirm).pack(side="right")
+
+    def _confirm(self):
+        titel = self.titel_e.get().strip()
+        datum = self.datum_e.get().strip()
+        zeit  = self.zeit_e.get().strip()
+        host  = self.host_var.get().strip()
+        helpers = [v.get().strip() for v in self.helper_vars if v.get().strip()]
+        try:
+            max_p = int(self.max_e.get().strip())
+        except ValueError:
+            messagebox.showwarning("Fehler","Bitte gueltige Zahl fuer Teilnehmer eingeben.",parent=self); return
+        if not titel or not datum or not zeit or not host:
+            messagebox.showwarning("Fehler","Bitte Titel, Datum, Zeit und Host eingeben.",parent=self); return
+        # Helper duerfen nicht gleich dem Host sein
+        for h in helpers:
+            if h == host:
+                messagebox.showwarning("Fehler","Ein Helfer kann nicht der Host sein.",parent=self); return
+        ex = self.existing or {}
+        data = {
+            "id": ex.get("id", int(time.time()*1000)) if self.existing else int(time.time()*1000),
+            "titel": titel, "datum": datum, "zeit": zeit,
+            "host": host, "helpers": helpers,
+            "max_participants": max_p,
+            "participants": ex.get("participants", []),
+            "ts": ex.get("ts", now_str()) if self.existing else now_str(),
+            "ts_edit": now_str(),
+        }
+        self.on_confirm(data); self.destroy()
+
+
+class TrainingsTab(tk.Frame):
+    """Trainings-Termine mit Anmeldung fuer Azubis."""
+    def __init__(self, parent):
+        super().__init__(parent, bg=C["BG"])
+        self._trainings = []
+        self._mitarbeiter = []
+        self._load_local()
+        self._build_toolbar()
+        self._build_list()
+        self._refresh()
+        # Im Hintergrund vom Gist laden (falls verfuegbar)
+        threading.Thread(target=self._sync_load, daemon=True).start()
+
+    def _load_local(self):
+        try:
+            self._trainings = load_json(TRAININGS_FILE)
+        except Exception:
+            self._trainings = []
+
+    def _save_local(self):
+        save_json(TRAININGS_FILE, self._trainings)
+
+    def _sync_load(self):
+        try:
+            data = gist_load_data(TRAININGS_GIST_FILENAME)
+            if data is not None and isinstance(data, list):
+                self._trainings = data
+                self._save_local()
+                self.after(0, self._refresh)
+        except Exception:
+            pass
+        # Auch Mitarbeiter laden fuer die Dropdowns
+        try:
+            m, _ = personal_sync_load()
+            if m is not None:
+                self._mitarbeiter = m
+        except Exception:
+            pass
+
+    def _sync_save(self):
+        threading.Thread(target=lambda: gist_sync_data(
+            TRAININGS_GIST_FILENAME,
+            json.dumps(self._trainings, ensure_ascii=False, indent=2)
+        ), daemon=True).start()
+
+    def _build_toolbar(self):
+        tb = tk.Frame(self, bg=C["BG"]); tb.pack(fill="x", padx=16, pady=10)
+        make_btn(tb, "+  Training erstellen", self._open_add, pady=7).pack(side="left")
+        make_btn(tb, "🔄  Sync", self._manual_sync, bg="#557799", pady=7).pack(side="left", padx=8)
+        # Aktueller User-Status
+        global _CURRENT_USER
+        status = f"Angemeldet als: {_CURRENT_USER['bn'] or 'nicht eingeloggt'}"
+        if _CURRENT_USER["rank"] in AZUBI_RANKS:
+            status += f"  |  Rang: {_CURRENT_USER['rank']}  |  Kann sich anmelden"
+        elif _CURRENT_USER["bn"]:
+            status += f"  |  Rang: {_CURRENT_USER['rank'] or '?'}"
+        self._status_lbl = tk.Label(tb, text=status, font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"])
+        self._status_lbl.pack(side="right", padx=8)
+        self._sync_lbl = tk.Label(tb, text="", font=FONT_LABEL, bg=C["BG"], fg=C["SUBTEXT"])
+        self._sync_lbl.pack(side="right")
+
+    def _manual_sync(self):
+        self._sync_lbl.configure(text="Sync ...")
+        threading.Thread(target=self._sync_load, daemon=True).start()
+
+    def _build_list(self):
+        outer = tk.Frame(self, bg=C["BG"]); outer.pack(fill="both", expand=True, padx=16, pady=(0,16))
+        # Header
+        hdr = tk.Frame(outer, bg=C["PRIMARY"]); hdr.pack(fill="x")
+        for txt, w, exp in [("#",3,False),("Titel",18,False),("Datum",12,False),("Zeit",8,False),
+                             ("Host",14,False),("Helfer",18,False),("Plaetze",10,False),("",14,False)]:
+            l = tk.Label(hdr, text=txt, font=("Segoe UI",9,"bold"),
+                         bg=C["PRIMARY"], fg="white", anchor="w", pady=8, padx=6)
+            if w: l.configure(width=w)
+            l.pack(side="left", fill="x" if exp else "none", expand=exp)
+        # Liste
+        sc = tk.Frame(outer, bg=C["BG"]); sc.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(sc, bg=C["BG"], highlightthickness=0)
+        sb = tk.Scrollbar(sc, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y"); self.canvas.pack(side="left", fill="both", expand=True)
+        self.rf = tk.Frame(self.canvas, bg=C["BG"])
+        self._cw = self.canvas.create_window((0,0), window=self.rf, anchor="nw")
+        self.rf.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self._cw, width=e.width))
+        self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-1*(e.delta/120)),"units"))
+
+    def _refresh(self):
+        for w in self.rf.winfo_children(): w.destroy()
+        global _CURRENT_USER
+        if not self._trainings:
+            tk.Label(self.rf, text="Keine Trainings angelegt.", font=FONT_LABEL,
+                     bg=C["BG"], fg=C["SUBTEXT"]).pack(pady=40); return
+        sorted_t = sorted(self._trainings, key=lambda t: t.get("datum","") + t.get("zeit",""), reverse=True)
+        is_azubi = _CURRENT_USER["rank"] in AZUBI_RANKS
+        current_user_bn = _CURRENT_USER["bn"]
+        for i, tr in enumerate(sorted_t):
+            rbg = C["ROW_ODD"] if i%2==0 else C["ROW_EVEN"]
+            row = tk.Frame(self.rf, bg=rbg, highlightthickness=1, highlightbackground=C["BORDER"])
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=str(i+1), font=FONT_TABLE, bg=rbg, fg=C["SUBTEXT"],
+                     width=3, anchor="w").pack(side="left", padx=6, pady=8)
+            tk.Label(row, text=tr.get("titel",""), font=("Segoe UI",10,"bold"),
+                     bg=rbg, fg=C["TEXT"], width=18, anchor="w").pack(side="left", padx=4, pady=8)
+            tk.Label(row, text=tr.get("datum",""), font=FONT_TABLE, bg=rbg, fg=C["TEXT"],
+                     width=12, anchor="w").pack(side="left", padx=4, pady=8)
+            tk.Label(row, text=tr.get("zeit",""), font=FONT_TABLE, bg=rbg, fg=C["TEXT"],
+                     width=8, anchor="w").pack(side="left", padx=4, pady=8)
+            tk.Label(row, text=tr.get("host",""), font=FONT_TABLE, bg=rbg, fg=C["TEXT"],
+                     width=14, anchor="w").pack(side="left", padx=4, pady=8)
+            helpers = ", ".join(tr.get("helpers",[])) or "–"
+            tk.Label(row, text=helpers, font=FONT_TABLE, bg=rbg, fg=C["SUBTEXT"],
+                     width=18, anchor="w").pack(side="left", padx=4, pady=8)
+            # Plaetze
+            max_p = tr.get("max_participants",0)
+            cur_p = len(tr.get("participants",[]))
+            full = cur_p >= max_p
+            platz_txt = f"{cur_p}/{max_p}"
+            platz_col = "#E74C3C" if full else "#27AE60"
+            tk.Label(row, text=platz_txt, font=("Segoe UI",9,"bold"),
+                     bg=rbg, fg=platz_col, width=10, anchor="w").pack(side="left", padx=4, pady=8)
+            # Anmelden/Abmelden Button
+            is_signed_up = current_user_bn and current_user_bn in tr.get("participants",[])
+            if is_azubi and current_user_bn:
+                if is_signed_up:
+                    b = tk.Button(row, text="Abmelden", font=("Segoe UI",8,"bold"),
+                                  bg="#CCBBBB", fg=C["TEXT"], relief="flat", cursor="hand2",
+                                  padx=8, pady=2, bd=0,
+                                  command=lambda t=tr: self._anmelden(t, current_user_bn))
+                    b.pack(side="left", padx=4)
+                elif full:
+                    tk.Label(row, text="Voll", font=("Segoe UI",8,"bold"),
+                             bg=rbg, fg="#E74C3C", padx=8).pack(side="left")
+                else:
+                    b = tk.Button(row, text="Anmelden", font=("Segoe UI",8,"bold"),
+                                  bg="#27AE60", fg="white", relief="flat", cursor="hand2",
+                                  padx=8, pady=2, bd=0,
+                                  command=lambda t=tr: self._anmelden(t, current_user_bn))
+                    b.pack(side="left", padx=4)
+            elif is_signed_up:
+                tk.Label(row, text="Angemeldet", font=("Segoe UI",8,"bold"),
+                         bg=rbg, fg="#27AE60", padx=8).pack(side="left")
+            # Bearbeiten/Loeschen (nur eingeloggt)
+            if current_user_bn:
+                d = tk.Label(row, text=" X ", font=("Segoe UI",11,"bold"), bg=rbg, fg=C["DANGER"], cursor="hand2")
+                d.pack(side="right", padx=4, pady=8)
+                d.bind("<Button-1>", lambda ev, t=tr: self._delete(t))
+                e_lbl = tk.Label(row, text=" ✎ ", font=("Segoe UI",11), bg=rbg, fg="#4488CC", cursor="hand2")
+                e_lbl.pack(side="right", padx=4, pady=8)
+                e_lbl.bind("<Button-1>", lambda ev, t=tr: self._edit(t))
+
+    def _anmelden(self, training, bn):
+        idx = None
+        for i, t in enumerate(self._trainings):
+            if t.get("id") == training.get("id"):
+                idx = i; break
+        if idx is None: return
+        tr = self._trainings[idx]
+        parts = tr.get("participants",[])
+        if bn in parts:
+            parts.remove(bn)
+        else:
+            if len(parts) >= tr.get("max_participants",0):
+                messagebox.showwarning("Voll","Alle Plaetze sind belegt.", parent=self); return
+            parts.append(bn)
+        tr["participants"] = parts
+        self._save_local()
+        self._sync_save()
+        self._refresh()
+
+    def _open_add(self):
+        if not _CURRENT_USER["bn"]:
+            messagebox.showwarning("Hinweis","Bitte zuerst im Personal-Tab anmelden.", parent=self); return
+        if not self._mitarbeiter:
+            threading.Thread(target=self._sync_load, daemon=True).start()
+        TrainingPopup(self.winfo_toplevel(), self._add, mitarbeiter_list=self._mitarbeiter)
+
+    def _add(self, data):
+        self._trainings.append(data)
+        self._save_local()
+        self._sync_save()
+        self._refresh()
+
+    def _edit(self, training):
+        if not _CURRENT_USER["bn"]:
+            messagebox.showwarning("Hinweis","Bitte zuerst anmelden.", parent=self); return
+        def apply(data):
+            for i, t in enumerate(self._trainings):
+                if t.get("id") == training.get("id"):
+                    self._trainings[i] = data; break
+            self._save_local()
+            self._sync_save()
+            self._refresh()
+        TrainingPopup(self.winfo_toplevel(), apply, existing=training,
+                      mitarbeiter_list=self._mitarbeiter)
+
+    def _delete(self, training):
+        if not _CURRENT_USER["bn"]:
+            return
+        if messagebox.askyesno("Loeschen?",
+                f"Training '{training.get('titel','')}' wirklich loeschen?", parent=self):
+            self._trainings = [t for t in self._trainings if t.get("id") != training.get("id")]
+            self._save_local()
+            self._sync_save()
+            self._refresh()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# SETTINGS TAB
 # ════════════════════════════════════════════════════════════════════════
 class SettingsTab(tk.Frame):
     def __init__(self, parent, app):
@@ -1965,20 +2132,6 @@ class SettingsTab(tk.Frame):
         tk.Frame(s2, bg=C["PANEL"], height=6).pack()
         tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", padx=32, pady=2)
 
-        # ── Screenshot-Import ─────────────────────────────────────────────────
-        s2b = section(inner, "Screenshot-Import (KI)")
-        tk.Label(s2b, text="Anthropic API-Key fuer automatischen Fahrten-Import aus Screenshots:",
-                 font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"], justify="left").pack(anchor="w", padx=16, pady=(8,6))
-        self.api_key_e = tk.Entry(s2b, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                  insertbackground=C["TEXT"], highlightthickness=1, show="*",
-                                  highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=40)
-        self.api_key_e.pack(anchor="w", padx=16, ipady=5)
-        self.api_key_e.insert(0, SETTINGS.get("anthropic_api_key",""))
-        self._api_key_lbl = tk.Label(s2b, text="", font=FONT_LABEL, bg=C["PANEL"], fg="#27AE60")
-        self._api_key_lbl.pack(anchor="w", padx=16)
-        make_btn(s2b, "Speichern", self._save_api_key, pady=6).pack(anchor="w", padx=16, pady=(6,14))
-        tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", padx=32, pady=2)
-
         # ── Schichtplan ──────────────────────────────────────────────────────
         s2c = section(inner, "Schichtplan")
         short = SCHICHTPLAN_GSHEET_URL[:70] + ("..." if len(SCHICHTPLAN_GSHEET_URL) > 70 else "")
@@ -1986,7 +2139,7 @@ class SettingsTab(tk.Frame):
         col_s = "#27AE60" if "DEINE_SHEET_ID" not in SCHICHTPLAN_GSHEET_URL else "#E74C3C"
         tk.Label(s2c,
                  text="Der Google-Sheets-Link ist fest im Skript hinterlegt\n"
-                      "(Konstante SCHICHTPLAN_GSHEET_URL, ca. Zeile 109).\n"
+                      "(Konstante SCHICHTPLAN_GSHEET_URL).\n"
                       "Aenderungen direkt dort vornehmen.",
                  font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"], justify="left").pack(anchor="w", padx=16, pady=(8,4))
         tk.Label(s2c, text=status, font=("Segoe UI",9,"bold"),
@@ -1995,60 +2148,19 @@ class SettingsTab(tk.Frame):
                  bg=C["PANEL"], fg=C["SUBTEXT"]).pack(anchor="w", padx=16, pady=(2,14))
         tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", padx=32, pady=2)
 
-        # ── News / Webhooks ──────────────────────────────────────────────────
-        s2d = section(inner, "News / Webhooks")
-        tk.Label(s2d, text="2 lokale Webhook-Empfaenger fuer den News-Tab:",
-                 font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"], justify="left").pack(anchor="w", padx=16, pady=(8,6))
-        nrow = tk.Frame(s2d, bg=C["PANEL"]); nrow.pack(anchor="w", padx=16, pady=4)
-        tk.Label(nrow, text="Port:", font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"]).pack(side="left")
-        self.news_port_e = tk.Entry(nrow, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                    insertbackground=C["TEXT"], highlightthickness=1,
-                                    highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=8)
-        self.news_port_e.pack(side="left", padx=(6,18), ipady=4)
-        self.news_port_e.insert(0, str(SETTINGS.get("news_webhook_port",8765)))
-        tk.Label(nrow, text="Kanal 1:", font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"]).pack(side="left")
-        self.news_c1_e = tk.Entry(nrow, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                  insertbackground=C["TEXT"], highlightthickness=1,
-                                  highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=14)
-        self.news_c1_e.pack(side="left", padx=(6,18), ipady=4)
-        self.news_c1_e.insert(0, SETTINGS.get("news_channel1_name","Kanal 1"))
-        tk.Label(nrow, text="Kanal 2:", font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"]).pack(side="left")
-        self.news_c2_e = tk.Entry(nrow, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                  insertbackground=C["TEXT"], highlightthickness=1,
-                                  highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=14)
-        self.news_c2_e.pack(side="left", padx=6, ipady=4)
-        self.news_c2_e.insert(0, SETTINGS.get("news_channel2_name","Kanal 2"))
-        self._news_lbl = tk.Label(s2d, text="", font=FONT_LABEL, bg=C["PANEL"], fg="#27AE60")
-        self._news_lbl.pack(anchor="w", padx=16)
-        make_btn(s2d, "Speichern (Neustart fuer Port-Aenderung noetig)",
-                 self._save_news, pady=6).pack(anchor="w", padx=16, pady=(6,14))
-        tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", padx=32, pady=2)
-
-        # ── Personal Sync (GitHub Gist) ───────────────────────────────────────
-        s_gist = section(inner, "Personal-Tab – Cloud-Sync (GitHub Gist)")
+        # ── Cloud-Sync (GitHub Gist) ──────────────────────────────────────────
+        s_gist = section(inner, "Cloud-Sync (GitHub Gist)")
+        gist_status = "✔  Konfiguriert" if GIST_URL and GIST_TOKEN else "⚠  Bitte in der Skript-Datei eintragen"
+        gist_col = "#27AE60" if GIST_URL and GIST_TOKEN else "#E74C3C"
         tk.Label(s_gist,
-                 text="Damit alle Benutzer dieselbe Mitarbeiterliste sehen, wird ein GitHub Gist genutzt.\n"
-                      "1. Gist erstellen (gist.github.com), Datei personal_data.json anlegen (Inhalt: {})\n"
-                      "2. GitHub Personal Access Token mit 'gist'-Berechtigung erstellen\n"
-                      "3. Gist-URL und Token hier eintragen – alle tragen dasselbe ein.",
+                 text="Gist-URL und Token werden fest im Skript definiert\n"
+                      "(Konstanten GIST_URL und GIST_TOKEN, ca. Zeile 175).\n"
+                      "Personal-, Trainings- und Termin-Daten werden ueber diesen Gist synchronisiert.",
                  font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"], justify="left").pack(anchor="w", padx=16, pady=(8,6))
-        tk.Label(s_gist, text="Gist-URL (z. B. https://gist.github.com/username/abc123):",
-                 font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"]).pack(anchor="w", padx=16)
-        self.gist_url_e = tk.Entry(s_gist, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                   insertbackground=C["TEXT"], highlightthickness=1,
-                                   highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=52)
-        self.gist_url_e.pack(anchor="w", padx=16, ipady=5, pady=4)
-        self.gist_url_e.insert(0, SETTINGS.get("personal_gist_url",""))
-        tk.Label(s_gist, text="GitHub Token (wird lokal gespeichert, nie uebertragen):",
-                 font=FONT_LABEL, bg=C["PANEL"], fg=C["SUBTEXT"]).pack(anchor="w", padx=16)
-        self.gist_token_e = tk.Entry(s_gist, font=FONT_INPUT, relief="flat", bg=C["BG"], fg=C["TEXT"],
-                                     show="*", insertbackground=C["TEXT"], highlightthickness=1,
-                                     highlightbackground=C["BORDER"], highlightcolor=C["PRIMARY"], width=52)
-        self.gist_token_e.pack(anchor="w", padx=16, ipady=5, pady=(0,4))
-        self.gist_token_e.insert(0, SETTINGS.get("personal_gist_token",""))
-        self._gist_lbl = tk.Label(s_gist, text="", font=FONT_LABEL, bg=C["PANEL"], fg="#27AE60")
-        self._gist_lbl.pack(anchor="w", padx=16)
-        make_btn(s_gist, "Speichern", self._save_gist, pady=6).pack(anchor="w", padx=16, pady=(6,14))
+        tk.Label(s_gist, text=gist_status, font=("Segoe UI",9,"bold"),
+                 bg=C["PANEL"], fg=gist_col).pack(anchor="w", padx=16)
+        tk.Label(s_gist, text=f"Gist-URL: {GIST_URL[:60] + '...' if len(GIST_URL) > 60 else GIST_URL or '(leer)'}",
+                 font=("Segoe UI",8), bg=C["PANEL"], fg=C["SUBTEXT"]).pack(anchor="w", padx=16, pady=(2,14))
         tk.Frame(inner, bg=C["BORDER"], height=1).pack(fill="x", padx=32, pady=2)
 
         # ── Personal Accounts ─────────────────────────────────────────────────
@@ -2110,32 +2222,6 @@ class SettingsTab(tk.Frame):
         dark = self._dm_var.get(); SETTINGS["dark_mode"] = dark; save_settings(SETTINGS)
         self._dm_lbl.configure(text="Dunkel" if dark else "Hell"); self.app._apply_dark(dark)
 
-    def _save_api_key(self):
-        key = self.api_key_e.get().strip(); SETTINGS["anthropic_api_key"] = key; save_settings(SETTINGS)
-        self._api_key_lbl.configure(text="Gespeichert." if key else "Key entfernt.")
-        self.after(3000, lambda: self._api_key_lbl.configure(text=""))
-
-    def _save_gsheet(self):
-        pass  # Link ist jetzt fest im Skript (SCHICHTPLAN_GSHEET_URL)
-
-    def _save_news(self):
-        try: port = int(self.news_port_e.get().strip())
-        except ValueError:
-            messagebox.showwarning("Fehler","Port muss eine Zahl sein.",parent=self); return
-        SETTINGS["news_webhook_port"] = port
-        SETTINGS["news_channel1_name"] = self.news_c1_e.get().strip() or "Kanal 1"
-        SETTINGS["news_channel2_name"] = self.news_c2_e.get().strip() or "Kanal 2"
-        save_settings(SETTINGS)
-        self._news_lbl.configure(text="Gespeichert.")
-        self.after(3000, lambda: self._news_lbl.configure(text=""))
-
-    def _save_gist(self):
-        SETTINGS["personal_gist_url"] = self.gist_url_e.get().strip()
-        SETTINGS["personal_gist_token"] = self.gist_token_e.get().strip()
-        save_settings(SETTINGS)
-        self._gist_lbl.configure(text="Gespeichert.")
-        self.after(3000, lambda: self._gist_lbl.configure(text=""))
-
 
 class STWTab(BaseTab):
     def __init__(self, parent): super().__init__(parent, DATA_FILE, tf_mode=False)
@@ -2165,7 +2251,6 @@ class NotizenApp(tk.Tk):
             while True:
                 kind, payload = _EVENT_QUEUE.get_nowait()
                 if kind == "schichtplan": _on_schichtplan_update(payload)
-                elif kind == "news": _on_news_update(payload)
         except queue.Empty:
             pass
         self.after(250, self._poll_event_queue)
@@ -2194,8 +2279,8 @@ class NotizenApp(tk.Tk):
             ("Fahrtenliste", FahrtenTab),
             ("Netzplan", NetzplanTab),
             ("Schichtplan", SchichtplanTab),
-            ("News", NewsTab),
             ("Personal", PersonalTab),
+            ("Trainings", TrainingsTab),
             ("Termine / Inactivity", TermineTab),
             ("Einstellungen", None),
         ]:
